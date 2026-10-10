@@ -129,7 +129,7 @@ internal class NativeTextInputView
 
     private var _inputDelegate: UITextInputDelegateProtocol? = null
 
-    private var markedSelectionRefreshScheduled = false
+    private var phraseBoundaryChangeScheduled = false
 
     private val touchesTrackerGestureRecognizer = TouchTrackingGestureRecognizer().also {
         addGestureRecognizer(it)
@@ -275,7 +275,7 @@ internal class NativeTextInputView
 
         if (input?.markedTextRange() != null) {
             input?.setSelectedTextRange(range)
-            scheduleMarkedSelectionRefresh()
+            schedulePhraseBoundaryChange()
             return
         }
 
@@ -293,37 +293,37 @@ internal class NativeTextInputView
     }
 
     /**
-     * Moving the caret inside marked text changes the IME conversion segment. The input delegate
-     * notification updates the segment, but the candidate bar is only rebuilt when the keyboard's
-     * text entry context is invalidated, which has no public API outside BrowserEngineKit. WebKit
-     * uses the same private call (`-[WKContentView _internalInvalidateTextEntryContext]`).
-     * Notifying synchronously from [setSelectedTextRange] makes UIKit re-read the selection
-     * mid-gesture and jitters the caret, so the refresh is posted after the gesture.
+     * Tapping inside marked text moves the IME phrase (conversion segment) boundary. UIKit's
+     * `-[_UIKeyboardTextSelectionController selectPositionAtPoint:granularity:completionHandler:]`
+     * reports it by sending `didChangePhraseBoundary` to the text input's `inputDelegate`, but only if
+     * that delegate responds to it. For custom text inputs, `UITextInteraction` installs a
+     * `UITextInteractionInputDelegate`, which does not, so the keyboard never regenerates the
+     * candidates for the new segment. Forward the notification to the keyboard directly; this is the
+     * call UIKit makes for its own text views. Posted after the gesture: notifying from inside
+     * [setSelectedTextRange] makes UIKit re-read the selection mid-gesture and jitters the caret.
      */
-    private fun scheduleMarkedSelectionRefresh() {
-        if (markedSelectionRefreshScheduled) return
-        markedSelectionRefreshScheduled = true
+    private fun schedulePhraseBoundaryChange() {
+        if (phraseBoundaryChangeScheduled) return
+        phraseBoundaryChangeScheduled = true
         dispatch_async(dispatch_get_main_queue()) {
-            markedSelectionRefreshScheduled = false
-            imeDebugLog("markedSelectionRefresh ${imeDebugState()}")
+            phraseBoundaryChangeScheduled = false
+            imeDebugLog("phraseBoundaryChange ${imeDebugState()}")
             if (input?.markedTextRange() != null) {
-                selectionWillChange()
-                selectionDidChange()
-                invalidateKeyboardTextEntryContext()
+                notifyKeyboardPhraseBoundaryChanged()
             }
         }
     }
 
-    private fun invalidateKeyboardTextEntryContext() {
+    private fun notifyKeyboardPhraseBoundaryChanged() {
         val keyboardClass = NSClassFromString("UIKeyboardImpl") as? NSObject ?: return
         val activeInstance = NSSelectorFromString("activeInstance")
         if (!keyboardClass.respondsToSelector(activeInstance)) return
         val keyboard = keyboardClass.performSelector(activeInstance) as? NSObject ?: return
-        val updateForChangedSelection = NSSelectorFromString("updateForChangedSelection")
-        val responds = keyboard.respondsToSelector(updateForChangedSelection)
-        imeDebugLog("invalidateKeyboardTextEntryContext keyboard=${keyboard.description} responds=$responds")
+        val didChangePhraseBoundary = NSSelectorFromString("didChangePhraseBoundary")
+        val responds = keyboard.respondsToSelector(didChangePhraseBoundary)
+        imeDebugLog("didChangePhraseBoundary keyboard=${keyboard.description} responds=$responds")
         if (responds) {
-            keyboard.performSelector(updateForChangedSelection)
+            keyboard.performSelector(didChangePhraseBoundary)
         }
     }
 
