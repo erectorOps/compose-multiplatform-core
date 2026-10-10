@@ -110,7 +110,8 @@ import platform.Foundation.NSThread
 
 // TEMPORARY IME diagnostics. Remove after the marked-text candidate investigation.
 internal fun imeDebugLog(message: String) {
-    NSLog("[IMEDBG] %@", message)
+    // Kotlin strings are not bridged to NSString through C varargs; pass the message as the format.
+    NSLog("[IMEDBG] " + message.replace("%", "%%"))
 }
 
 private fun imeDebugCaller(): String =
