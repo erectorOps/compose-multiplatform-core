@@ -100,12 +100,8 @@ import platform.UIKit.UIWritingToolsBehavior
 import platform.UIKit.addInteraction
 import platform.UIKit.systemBlueColor
 import platform.darwin.NSInteger
-
-internal fun shouldNotifyInputDelegateOfSelectionChange(
-    hasMarkedText: Boolean,
-    isAtLeastIOS17: Boolean,
-    isTrackingTouches: Boolean,
-): Boolean = hasMarkedText || (!isAtLeastIOS17 && !isTrackingTouches)
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 
 internal class NativeTextInputView
     : CMPTextInputView(frame = CGRectZero.readValue()), UIKeyInputProtocol, UITextInputProtocol {
@@ -116,6 +112,8 @@ internal class NativeTextInputView
         get() = input?.inputTraits ?: EmptyInputTraits
 
     private var _inputDelegate: UITextInputDelegateProtocol? = null
+
+    private var markedSelectionRefreshScheduled = false
 
     private val touchesTrackerGestureRecognizer = TouchTrackingGestureRecognizer().also {
         addGestureRecognizer(it)
@@ -248,21 +246,40 @@ internal class NativeTextInputView
         val range = selectedTextRange?.toTextRange()
         if (input?.getSelectedTextRange() == range) { return }
 
-        // UIKit already knows about selection changes that it initiated, except when moving the
-        // caret inside marked text: the IME must be invalidated so it can recompute the active
-        // conversion segment and candidates.
-        val notifySelectionChanges =
-            shouldNotifyInputDelegateOfSelectionChange(
-                hasMarkedText = input?.markedTextRange() != null,
-                isAtLeastIOS17 = available(OS.Ios to OSVersion(major = 17)),
-                isTrackingTouches = touchesTrackerGestureRecognizer.isTrackingTouches,
-            )
+        if (input?.markedTextRange() != null) {
+            input?.setSelectedTextRange(range)
+            scheduleMarkedSelectionRefresh()
+            return
+        }
+
+        // iOS <= 16 does not update selection handles when selection changes from the keyboard
+        // Posting an extra notification solves this issue
+        val notifySelectionChanges = !available(OS.Ios to OSVersion(major = 17)) &&
+            !touchesTrackerGestureRecognizer.isTrackingTouches
         if (notifySelectionChanges) {
             selectionWillChange()
         }
         input?.setSelectedTextRange(range)
         if (notifySelectionChanges) {
             selectionDidChange()
+        }
+    }
+
+    /**
+     * Moving the caret inside marked text changes the IME conversion segment, but the keyboard only
+     * reloads its candidates when notified outside of the selection gesture (as WebKit does).
+     * Notifying synchronously from [setSelectedTextRange] makes UIKit re-read the selection mid-gesture,
+     * which jitters the caret and leaves the candidate bar stale.
+     */
+    private fun scheduleMarkedSelectionRefresh() {
+        if (markedSelectionRefreshScheduled) return
+        markedSelectionRefreshScheduled = true
+        dispatch_async(dispatch_get_main_queue()) {
+            markedSelectionRefreshScheduled = false
+            if (input?.markedTextRange() != null) {
+                selectionWillChange()
+                selectionDidChange()
+            }
         }
     }
 
