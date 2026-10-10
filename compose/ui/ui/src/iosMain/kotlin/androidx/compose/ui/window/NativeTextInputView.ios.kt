@@ -102,6 +102,9 @@ import platform.UIKit.systemBlueColor
 import platform.darwin.NSInteger
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
+import platform.Foundation.NSClassFromString
+import platform.Foundation.NSSelectorFromString
+import platform.darwin.NSObject
 
 internal class NativeTextInputView
     : CMPTextInputView(frame = CGRectZero.readValue()), UIKeyInputProtocol, UITextInputProtocol {
@@ -266,10 +269,12 @@ internal class NativeTextInputView
     }
 
     /**
-     * Moving the caret inside marked text changes the IME conversion segment, but the keyboard only
-     * reloads its candidates when notified outside of the selection gesture (as WebKit does).
-     * Notifying synchronously from [setSelectedTextRange] makes UIKit re-read the selection mid-gesture,
-     * which jitters the caret and leaves the candidate bar stale.
+     * Moving the caret inside marked text changes the IME conversion segment. The input delegate
+     * notification updates the segment, but the candidate bar is only rebuilt when the keyboard's
+     * text entry context is invalidated, which has no public API outside BrowserEngineKit. WebKit
+     * uses the same private call (`-[WKContentView _internalInvalidateTextEntryContext]`).
+     * Notifying synchronously from [setSelectedTextRange] makes UIKit re-read the selection
+     * mid-gesture and jitters the caret, so the refresh is posted after the gesture.
      */
     private fun scheduleMarkedSelectionRefresh() {
         if (markedSelectionRefreshScheduled) return
@@ -279,7 +284,19 @@ internal class NativeTextInputView
             if (input?.markedTextRange() != null) {
                 selectionWillChange()
                 selectionDidChange()
+                invalidateKeyboardTextEntryContext()
             }
+        }
+    }
+
+    private fun invalidateKeyboardTextEntryContext() {
+        val keyboardClass = NSClassFromString("UIKeyboardImpl") as? NSObject ?: return
+        val activeInstance = NSSelectorFromString("activeInstance")
+        if (!keyboardClass.respondsToSelector(activeInstance)) return
+        val keyboard = keyboardClass.performSelector(activeInstance) as? NSObject ?: return
+        val updateForChangedSelection = NSSelectorFromString("updateForChangedSelection")
+        if (keyboard.respondsToSelector(updateForChangedSelection)) {
+            keyboard.performSelector(updateForChangedSelection)
         }
     }
 
