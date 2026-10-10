@@ -101,6 +101,12 @@ import platform.UIKit.addInteraction
 import platform.UIKit.systemBlueColor
 import platform.darwin.NSInteger
 
+internal fun shouldNotifyInputDelegateOfSelectionChange(
+    hasMarkedText: Boolean,
+    isAtLeastIOS17: Boolean,
+    isTrackingTouches: Boolean,
+): Boolean = hasMarkedText || (!isAtLeastIOS17 && !isTrackingTouches)
+
 internal class NativeTextInputView
     : CMPTextInputView(frame = CGRectZero.readValue()), UIKeyInputProtocol, UITextInputProtocol {
 
@@ -242,10 +248,15 @@ internal class NativeTextInputView
         val range = selectedTextRange?.toTextRange()
         if (input?.getSelectedTextRange() == range) { return }
 
-        // iOS <= 16 does not update selection handles when selection changes from the keyboard
-        // Posting an extra notification solves this issue
-        val notifySelectionChanges = !available(OS.Ios to OSVersion(major = 17)) &&
-            !touchesTrackerGestureRecognizer.isTrackingTouches
+        // UIKit already knows about selection changes that it initiated, except when moving the
+        // caret inside marked text: the IME must be invalidated so it can recompute the active
+        // conversion segment and candidates.
+        val notifySelectionChanges =
+            shouldNotifyInputDelegateOfSelectionChange(
+                hasMarkedText = input?.markedTextRange() != null,
+                isAtLeastIOS17 = available(OS.Ios to OSVersion(major = 17)),
+                isTrackingTouches = touchesTrackerGestureRecognizer.isTrackingTouches,
+            )
         if (notifySelectionChanges) {
             selectionWillChange()
         }
