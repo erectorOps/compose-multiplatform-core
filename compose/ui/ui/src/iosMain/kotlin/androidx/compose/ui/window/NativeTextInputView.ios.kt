@@ -105,6 +105,18 @@ import platform.darwin.dispatch_get_main_queue
 import platform.Foundation.NSClassFromString
 import platform.Foundation.NSSelectorFromString
 import platform.darwin.NSObject
+import platform.Foundation.NSLog
+import platform.Foundation.NSThread
+
+// TEMPORARY IME diagnostics. Remove after the marked-text candidate investigation.
+internal fun imeDebugLog(message: String) {
+    NSLog("[IMEDBG] %@", message)
+}
+
+private fun imeDebugCaller(): String =
+    NSThread.callStackSymbols.drop(2).take(8).joinToString("\n    ", prefix = "\n    ") {
+        it.toString()
+    }
 
 internal class NativeTextInputView
     : CMPTextInputView(frame = CGRectZero.readValue()), UIKeyInputProtocol, UITextInputProtocol {
@@ -203,7 +215,9 @@ internal class NativeTextInputView
      * @param text A string object representing the character typed on the system keyboard.
      */
     override fun insertText(text: String) {
+        imeDebugLog("insertText '$text' ${imeDebugState()}${imeDebugCaller()}")
         input?.insertText(text)
+        imeDebugLog("insertText done ${imeDebugState()}")
     }
 
     /**
@@ -212,6 +226,7 @@ internal class NativeTextInputView
      * https://developer.apple.com/documentation/uikit/uikeyinput/1614572-deletebackward
      */
     override fun deleteBackward() {
+        imeDebugLog("deleteBackward ${imeDebugState()}")
         input?.deleteBackward()
     }
 
@@ -220,6 +235,7 @@ internal class NativeTextInputView
     }
 
     override fun setInputDelegate(inputDelegate: UITextInputDelegateProtocol?) {
+        imeDebugLog("setInputDelegate ${inputDelegate?.let { (it as? NSObject)?.description }}")
         _inputDelegate = inputDelegate
     }
 
@@ -231,7 +247,9 @@ internal class NativeTextInputView
      */
     override fun textInRange(range: UITextRange): String? {
         val textRange = range.toTextRange() ?: return null
-        return input?.textInRange(textRange)
+        val result = input?.textInRange(textRange)
+        imeDebugLog("textInRange $textRange -> '$result'")
+        return result
     }
 
     /**
@@ -242,11 +260,16 @@ internal class NativeTextInputView
      */
     override fun replaceRange(range: UITextRange, withText: String) {
         val textRange = range.toTextRange() ?: return
+        imeDebugLog("replaceRange $textRange '$withText' ${imeDebugState()}${imeDebugCaller()}")
         input?.replaceRange(textRange, withText)
     }
 
     override fun setSelectedTextRange(selectedTextRange: UITextRange?) {
         val range = selectedTextRange?.toTextRange()
+        imeDebugLog(
+            "setSelectedTextRange $range tracking=${touchesTrackerGestureRecognizer.isTrackingTouches} " +
+                "${imeDebugState()}${imeDebugCaller()}"
+        )
         if (input?.getSelectedTextRange() == range) { return }
 
         if (input?.markedTextRange() != null) {
@@ -281,6 +304,7 @@ internal class NativeTextInputView
         markedSelectionRefreshScheduled = true
         dispatch_async(dispatch_get_main_queue()) {
             markedSelectionRefreshScheduled = false
+            imeDebugLog("markedSelectionRefresh ${imeDebugState()}")
             if (input?.markedTextRange() != null) {
                 selectionWillChange()
                 selectionDidChange()
@@ -295,7 +319,9 @@ internal class NativeTextInputView
         if (!keyboardClass.respondsToSelector(activeInstance)) return
         val keyboard = keyboardClass.performSelector(activeInstance) as? NSObject ?: return
         val updateForChangedSelection = NSSelectorFromString("updateForChangedSelection")
-        if (keyboard.respondsToSelector(updateForChangedSelection)) {
+        val responds = keyboard.respondsToSelector(updateForChangedSelection)
+        imeDebugLog("invalidateKeyboardTextEntryContext keyboard=${keyboard.description} responds=$responds")
+        if (responds) {
             keyboard.performSelector(updateForChangedSelection)
         }
     }
@@ -308,7 +334,9 @@ internal class NativeTextInputView
      * https://developer.apple.com/documentation/uikit/uitextinput/1614541-selectedtextrange
      */
     override fun selectedTextRange(): UITextRange? {
-        return input?.getSelectedTextRange()?.toUITextRange()
+        val result = input?.getSelectedTextRange()
+        imeDebugLog("get selectedTextRange -> $result")
+        return result?.toUITextRange()
     }
 
     /**
@@ -320,7 +348,9 @@ internal class NativeTextInputView
      * https://developer.apple.com/documentation/uikit/uitextinput/1614489-markedtextrange
      */
     override fun markedTextRange(): UITextRange? {
-        return input?.markedTextRange()?.toUITextRange()
+        val result = input?.markedTextRange()
+        imeDebugLog("get markedTextRange -> $result")
+        return result?.toUITextRange()
     }
 
     override fun setMarkedTextStyle(markedTextStyle: Map<Any?, *>?) {
@@ -345,8 +375,11 @@ internal class NativeTextInputView
             val loc = location.toInt()
             TextRange(loc, loc + length.toInt())
         }
-
+        imeDebugLog(
+            "setMarkedText '$markedText' relative=$relativeTextRange ${imeDebugState()}${imeDebugCaller()}"
+        )
         input?.setMarkedText(markedText, relativeTextRange)
+        imeDebugLog("setMarkedText done ${imeDebugState()}")
     }
 
     /**
@@ -355,8 +388,13 @@ internal class NativeTextInputView
      * https://developer.apple.com/documentation/uikit/uitextinput/1614512-unmarktext
      */
     override fun unmarkText() {
+        imeDebugLog("unmarkText ${imeDebugState()}${imeDebugCaller()}")
         input?.unmarkText()
     }
+
+    private fun imeDebugState(): String =
+        "[sel=${input?.getSelectedTextRange()} marked=${input?.markedTextRange()} " +
+            "text='${input?.let { it.textInRange(TextRange(0, it.endOfDocument())) }}']"
 
     override fun beginningOfDocument(): UITextPosition {
         return TextInputPosition(0)
@@ -513,6 +551,7 @@ internal class NativeTextInputView
     override fun firstRectForRange(range: UITextRange): CValue<CGRect> {
         val fallback = CGRectZero.readValue()
         val textRange = range.toTextRange() ?: return fallback
+        imeDebugLog("firstRectForRange $textRange")
         return input?.firstSelectionRectForRange(textRange)?.toCGRect()
             ?: fallback
     }
@@ -520,6 +559,7 @@ internal class NativeTextInputView
     override fun caretRectForPosition(position: UITextPosition): CValue<CGRect> {
         val fallbackRect = CGRectMake(x = 1.0, y = 1.0, width = 0.0, height = 1.0)
         val position = (position as? TextInputPosition)?.position ?: return fallbackRect
+        imeDebugLog("caretRectForPosition $position")
         val caretDpRect = input?.caretDpRectForPosition(position)
         return caretDpRect?.toCGRect() ?: fallbackRect
     }
@@ -536,6 +576,7 @@ internal class NativeTextInputView
     override fun closestPositionToPoint(point: CValue<CGPoint>): UITextPosition? {
         val closestPosition =
             input?.closestPositionToPoint(point.useContents { DpOffset(x.dp, y.dp) }) ?: return null
+        imeDebugLog("closestPositionToPoint -> $closestPosition")
         return TextInputPosition(closestPosition)
     }
 
@@ -548,6 +589,7 @@ internal class NativeTextInputView
             point.useContents { DpOffset(x.dp, y.dp) },
             textRange
         ) ?: return null
+        imeDebugLog("closestPositionToPoint within $textRange -> $closestPosition")
         return TextInputPosition(closestPosition)
     }
 
@@ -589,6 +631,7 @@ internal class NativeTextInputView
      * Call when something changes in text data
      */
     fun textWillChange() {
+        imeDebugLog("-> textWillChange")
         _inputDelegate?.textWillChange(this)
     }
 
@@ -596,6 +639,7 @@ internal class NativeTextInputView
      * Call when something changes in text data
      */
     fun textDidChange() {
+        imeDebugLog("-> textDidChange")
         _inputDelegate?.textDidChange(this)
     }
 
@@ -603,6 +647,7 @@ internal class NativeTextInputView
      * Call when something changes in text data
      */
     fun selectionWillChange() {
+        imeDebugLog("-> selectionWillChange")
         _inputDelegate?.selectionWillChange(this)
     }
 
@@ -610,6 +655,7 @@ internal class NativeTextInputView
      * Call when something changes in text data
      */
     fun selectionDidChange() {
+        imeDebugLog("-> selectionDidChange")
         _inputDelegate?.selectionDidChange(this)
     }
 
@@ -875,6 +921,7 @@ private class TouchTrackingGestureRecognizer : CMPGestureRecognizer(target = nul
 
     override fun touchesBegan(touches: Set<*>, withEvent: UIEvent) {
         super.touchesBegan(touches, withEvent)
+        imeDebugLog("touchesBegan")
 
         touches.forEach {
             it as UITouch
@@ -884,6 +931,7 @@ private class TouchTrackingGestureRecognizer : CMPGestureRecognizer(target = nul
 
     override fun touchesEnded(touches: Set<*>, withEvent: UIEvent) {
         super.touchesEnded(touches, withEvent)
+        imeDebugLog("touchesEnded")
 
         touches.forEach {
             it as UITouch
