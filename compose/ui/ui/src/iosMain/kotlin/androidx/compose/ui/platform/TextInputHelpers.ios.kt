@@ -382,26 +382,32 @@ internal class TextInputStringTokenizer(
             UITextGranularity.UITextGranularityWord -> BreakIterator.makeWordInstance()
             UITextGranularity.UITextGranularitySentence -> BreakIterator.makeSentenceInstance()
             UITextGranularity.UITextGranularityLine -> BreakIterator.makeLineInstance()
-            UITextGranularity.UITextGranularityParagraph ->
-                return positionFromPositionToParagraphBoundary(position, isForward)
+            UITextGranularity.UITextGranularityParagraph -> null
 
             else -> return super.positionFromPosition(position, toBoundary, inDirection)
         }
 
         val string = getString() ?: ""
+        // UIKit may pass a position taken from a text layout that is older than the current text
+        // (e.g. closestPositionToPoint right after the text got shorter), or the input may already
+        // be detached (empty string). Indexing the string with it would crash the app.
+        val location = textPosition.position.coerceIn(0, string.length)
+        if (iterator == null) {
+            return TextInputPosition(paragraphBoundaryFrom(string, location, isForward))
+        }
         iterator.setText(string)
 
         val iteratorResult = if (isForward) {
-            if (textPosition.position >= string.length - 1) {
+            if (location >= string.length - 1) {
                 string.length
             } else {
-                iterator.following(textPosition.position)
+                iterator.following(location)
             }
         } else {
-            if (textPosition.position <= 0) {
+            if (location <= 0) {
                 0
             } else {
-                iterator.preceding(textPosition.position)
+                iterator.preceding(location)
             }
         }
 
@@ -420,42 +426,42 @@ internal class TextInputStringTokenizer(
             UITextGranularity.UITextGranularityWord -> BreakIterator.makeWordInstance()
             UITextGranularity.UITextGranularitySentence -> BreakIterator.makeSentenceInstance()
             UITextGranularity.UITextGranularityLine -> BreakIterator.makeLineInstance()
-            UITextGranularity.UITextGranularityParagraph -> {
-                return isAtParagraphBoundary(getString() ?: "", textPosition.position)
-            }
+            UITextGranularity.UITextGranularityParagraph -> null
             else -> return super.isPositionAtBoundary(position, atBoundary, inDirection)
         }
 
-        iterator.setText(getString() ?: "")
-        return iterator.isBoundary(textPosition.position)
+        val string = getString() ?: ""
+        // See positionFromPosition: the position may be outside of the current text.
+        val location = textPosition.position.coerceIn(0, string.length)
+        if (iterator == null) {
+            return isAtParagraphBoundary(string, location)
+        }
+        iterator.setText(string)
+        return iterator.isBoundary(location)
     }
 
-    private fun positionFromPositionToParagraphBoundary(
-        position: UITextPosition,
-        isForward: Boolean
-    ): UITextPosition? {
-        val textPosition = position as? TextInputPosition ?: return null
-
-        val string = getString() ?: ""
-        var location = textPosition.position
+    /** [location] must be in `0..text.length`. */
+    private fun paragraphBoundaryFrom(text: String, location: Int, isForward: Boolean): Int {
+        var result = location
         if (isForward) {
-            while (location < string.length) {
-                if (string[location].isNewLineCharacter()) {
+            while (result < text.length) {
+                if (text[result].isNewLineCharacter()) {
                     break
                 }
-                location++
+                result++
             }
         } else {
-            while (location > 0) {
-                if (string[location - 1].isNewLineCharacter()) {
+            while (result > 0) {
+                if (text[result - 1].isNewLineCharacter()) {
                     break
                 }
-                location--
+                result--
             }
         }
-        return TextInputPosition(location)
+        return result
     }
 
+    /** [position] must be in `0..text.length`. */
     private fun isAtParagraphBoundary(text: String, position: Int): Boolean {
         if (position == 0 || position == text.length) return true
         return text[position].isNewLineCharacter() || text[position - 1].isNewLineCharacter()

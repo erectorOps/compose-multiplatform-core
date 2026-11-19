@@ -307,22 +307,24 @@ internal class NativeTextInputConnection(
         }
     }
 
-    override fun closestPositionToPoint(point: DpOffset): Int? {
-        return textLayoutResult?.getOffsetForPosition(point.toOffset(view.density))
-    }
+    // textLayoutResult may lag behind currentTextFieldValue (it is updated on the next layout),
+    // so offsets taken from it are clamped to the current text before they are handed to UIKit.
+    private fun offsetForPoint(point: DpOffset): Int? =
+        textLayoutResult?.getOffsetForPosition(point.toOffset(view.density))
+            ?.coerceIn(0, endOfDocument())
+
+    override fun closestPositionToPoint(point: DpOffset): Int? = offsetForPoint(point)
 
     override fun closestPositionToPoint(point: DpOffset, withinRange: TextRange): Int? {
-        val pointOffset =
-            textLayoutResult?.getOffsetForPosition(point.toOffset(view.density))
-                ?: return null
+        val pointOffset = offsetForPoint(point) ?: return null
         return pointOffset.coerceIn(withinRange.start, withinRange.end)
     }
 
     override fun characterRangeAtPoint(point: DpOffset): TextRange? {
-        val pointOffset =
-            textLayoutResult?.getOffsetForPosition(point.toOffset(view.density))
-                ?: return null
-        return textLayoutResult?.getWordBoundary(pointOffset)
+        val pointOffset = offsetForPoint(point) ?: return null
+        val wordBoundary = textLayoutResult?.getWordBoundary(pointOffset) ?: return null
+        val end = endOfDocument()
+        return TextRange(wordBoundary.start.coerceIn(0, end), wordBoundary.end.coerceIn(0, end))
     }
 
     override fun positionWithinRange(
